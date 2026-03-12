@@ -17,10 +17,12 @@ const server = new McpServer({
 });
 
 const descriptionStructure: string = `
+When planning, document yourself regarding the task (e.g. search information online (use web_search tool if allowed), consult the codebase or ask further questions before delivering a plan). Preparing a plan can take several task update cycles until all the information is gathered.
+
 Structured description, details points when applicable:
 - Context: explain the why, and overall view how to solve the problem
 - Task details
-- Task location: where the task takes place
+- Task location: where the task takes place (filepath or physical location, etc.)
 - Architecture: final structure of the expected output
 - Dependencies: explain what are required for delivery
 - Examples of the deliverable and expectations
@@ -29,6 +31,7 @@ Structured description, details points when applicable:
 - Implementation steps: real, commitable implementation steps, questions to ask the user for clarification and decision
 - Testing plan
 - Deployment plan
+- Sources and reference: explicitely list the sources used to design the plan, or say no sources have been used.
 `
 
 // ── task_create ─────────────────────────────────────────────────
