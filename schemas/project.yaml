@@ -54,7 +54,7 @@ properties:
     format: "uri"
     description: "Git repository URL"
     examples:
-      - "https://github.com/skye/mnemo"
+      - "https://github.com/Skye-flyhigh/mnemo-mcp"
 
   status:
     type: string
