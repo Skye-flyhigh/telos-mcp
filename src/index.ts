@@ -2,18 +2,20 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { TaskStore } from "./store.js";
-import { loadConfig } from "./types.js";
+import { loadConfig } from "./config.js";
+import { projectArchive, projectCreate, projectList } from "./operations/projects.js";
+import { ProjectStore } from "./project-store.js";
+import { TaskStore } from "./task-store.js";
+import { VALID_TASK_STATUSES } from "./types.js";
 
-const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 const config = loadConfig();
-const store = new TaskStore(config.dir);
+const taskStore = new TaskStore(config.tasks_root);
+const projectStore = new ProjectStore(config.projects_root, config.archive_root);
 
 const server = new McpServer({
   name: "telos-mcp",
-  version: pkg.version,
+  version: "0.2.0",
 });
 
 const descriptionStructure: string = `
@@ -32,7 +34,41 @@ Structured description, details points when applicable:
 - Testing plan
 - Deployment plan
 - Sources and reference: explicitely list the sources used to design the plan, or say no sources have been used.
-`
+`;
+
+const taskRecord = {
+  subject: z.string().describe("Brief imperative title (e.g. 'Fix auth bug')"),
+  description: z.string().optional().describe(`Detailed markdown description. \n ${descriptionStructure}`),
+  owner: z.string().optional().describe("Who owns this task"),
+  project_id: z.string().optional().describe("Project key this task belongs to"),
+  parent_id: z.number().optional().describe("Parent ID, task parent ID whom task is related to"),
+  tags: z.array(z.string()).optional().describe("Task tags"),
+  metadata: z.record(z.string()).optional().describe("Arbitrary key-value pairs (e.g. { pr: '#42', priority: 'high' })"),
+  sources: z.array(z.string()).optional().describe("URLs, references, documentation used for this task (e.g. ['https://docs.example.com', 'Claude Code Plan Mode analysis'])"),
+}
+
+// For updates, subject is optional
+const taskUpdateRecord = {
+  subject: z.string().optional().describe("Brief imperative title (e.g. 'Fix auth bug')"),
+  description: z.string().optional().describe(`Detailed markdown description. \n ${descriptionStructure}`),
+  owner: z.string().optional().describe("Who owns this task"),
+  project_id: z.string().optional().describe("Project key this task belongs to"),
+  parent_id: z.number().optional().describe("Parent ID, task parent ID whom task is related to"),
+  tags: z.array(z.string()).optional().describe("Task tags"),
+  metadata: z.record(z.string()).optional().describe("Arbitrary key-value pairs (e.g. { pr: '#42', priority: 'high' })"),
+  sources: z.array(z.string()).optional().describe("URLs, references, documentation used for this task (e.g. ['https://docs.example.com', 'Claude Code Plan Mode analysis'])"),
+}
+
+type TaskVariant = "update" | "filter"
+
+const taskStatus = (variant: TaskVariant) => {
+  const description =
+    variant === "update"
+      ? "New status (deleted removes the task)"
+      : "Filter by status"
+
+  return z.enum(VALID_TASK_STATUSES).optional().describe(description)
+}
 
 // ── task_create ─────────────────────────────────────────────────
 
@@ -41,20 +77,12 @@ server.registerTool(
   {
     description: "Create a new task for tracking work",
     inputSchema: {
-      subject: z.string().describe("Brief imperative title (e.g. 'Fix auth bug')"),
-      description: z.string().optional().describe(`Detailed markdown description. \n ${descriptionStructure}`),
-      activeForm: z
-        .string()
-        .optional()
-        .describe("Present-continuous form shown in spinner when task is in_progress. Subject is imperative ('Fix auth bug'), activeForm is what's happening now ('Fixing auth bug'). Displayed as: ⠋ Fixing auth bug..."),
-      owner: z.string().optional().describe("Who owns this task"),
+      ...taskRecord,
       blockedBy: z.array(z.number()).optional().describe("Task IDs that must complete first"),
-      tags: z.array(z.string()).optional().describe("Categorization tags"),
-      metadata: z.record(z.string()).optional().describe("Arbitrary key-value pairs (e.g. { sources: 'https://...', pr: '#42' })"),
     }
   },
   async (params) => {
-    const task = store.create(params);
+    const task = taskStore.createTask(params);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(task, null, 2) }],
     };
@@ -69,23 +97,16 @@ server.registerTool(
     description: "Update an existing task's status, dependencies, or details",
     inputSchema: {
       taskId: z.number().describe("The task ID to update"),
-      status: z
-        .enum(["pending", "in_progress", "completed", "deleted"])
-        .optional()
-        .describe("New status (deleted removes the task)"),
-      subject: z.string().optional().describe("New subject"),
-      description: z.string().optional().describe(`New description with structure: \n ${descriptionStructure}`),
-      activeForm: z.string().optional().describe("New spinner text"),
-      owner: z.string().optional().describe("New owner"),
+      ...taskUpdateRecord,
+      status: taskStatus("update"),
       addBlockedBy: z.array(z.number()).optional().describe("Task IDs to add as blockers"),
       addBlocks: z.array(z.number()).optional().describe("Task IDs that this task blocks"),
-      tags: z.array(z.string()).optional().describe("Replace tags"),
       metadata: z.record(z.string().nullable()).optional().describe("Merge metadata keys into the task. Set a key to null to delete it."),
     }
   },
   async (params) => {
     const { taskId, ...fields } = params;
-    const task = store.update(taskId, fields);
+    const task = taskStore.update(taskId, fields);
 
     if (!task && fields.status === "deleted") {
       return {
@@ -115,7 +136,7 @@ server.registerTool(
     taskId: z.number().describe("The task ID to retrieve"),
   }},
   async ({ taskId }) => {
-    const task = store.get(taskId);
+    const task = taskStore.get(taskId);
 
     if (!task) {
       return {
@@ -135,16 +156,13 @@ server.registerTool(
 server.registerTool(
   "task_list",
   {description: "List all tasks (summary view: id, subject, status, owner, blockedBy)",
-  inputSchema: {
-    status: z
-      .enum(["pending", "in_progress", "completed"])
-      .optional()
-      .describe("Filter by status"),
+    inputSchema: {
+    status: taskStatus("filter"),
     owner: z.string().optional().describe("Filter by owner"),
-    tag: z.string().optional().describe("Filter by tag"),
+    project_id: z.string().optional().describe("Filter by project"),
   }},
   async (params) => {
-    const tasks = store.list(params);
+    const tasks = taskStore.list(params);
 
     if (tasks.length === 0) {
       return {
@@ -154,9 +172,9 @@ server.registerTool(
 
     const lines = tasks.map((t) => {
       const owner = t.owner ? ` @${t.owner}` : "";
-      const tags = t.tags.length > 0 ? ` ${t.tags.map((tag) => `#${tag}`).join(" ")}` : "";
+      const project = t.project_id ? ` #${t.project_id}` : "";
       const blocked = t.blockedBy.length > 0 ? ` (blocked by: ${t.blockedBy.join(", ")})` : "";
-      return `[${t.id}] ${t.status} — ${t.subject}${owner}${tags}${blocked}`;
+      return `[${t.id}] ${t.status} — ${t.subject}${owner}${project}${blocked}`;
     });
 
     return {
@@ -169,12 +187,12 @@ server.registerTool(
 
 server.registerTool(
   "task_delete",
-  {description: "Delete a task by ID (removes the file)",
+  {description: "Delete a task by ID (removes the folder)",
    inputSchema: {
     taskId: z.number().describe("The task ID to delete"),
   }},
   async ({ taskId }) => {
-    const deleted = store.delete(taskId);
+    const deleted = taskStore.delete(taskId);
 
     if (!deleted) {
       return {
@@ -189,12 +207,108 @@ server.registerTool(
   },
 );
 
+// ── project_create ──────────────────────────────────────────────
+
+server.registerTool(
+  "telos_project_create",
+  {
+    description: "Create a new project for organizing tasks",
+    inputSchema: {
+      key: z.string().regex(/^[a-z0-9-]+$/, "Must be kebab-case, no spaces").describe("Unique project identifier"),
+      display_name: z.string().min(1).describe("Human-readable project name"),
+      description: z.string().optional().describe("Optional project description"),
+      base_path: z.string().optional().describe("Absolute path to project source code"),
+      tech_stack: z.array(z.string()).optional().describe("Technologies used"),
+      repo_url: z.string().url().optional().describe("Git repository URL"),
+      clone: z.boolean().optional().describe("If true, clone repo_url to base_path"),
+      sources: z.array(z.string()).optional().describe("Initial references, documentation, or research sources for the project"),
+    },
+  },
+  async (params) => {
+    try {
+      const result = await projectCreate(projectStore, params);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ── project_list ────────────────────────────────────────────────
+
+server.registerTool(
+  "telos_project_list",
+  {
+    description: "List all projects with optional filtering",
+    inputSchema: {
+      status: z.enum(["active", "paused", "archived", "all"]).optional().describe("Filter by status"),
+      tech_stack: z.array(z.string()).optional().describe("Filter by technologies (match ANY)"),
+      search: z.string().optional().describe("Search in key, name, or description"),
+      sort: z.enum(["updated", "created", "name"]).optional().describe("Sort field"),
+      limit: z.number().optional().describe("Max results (default 100)"),
+      offset: z.number().optional().describe("Pagination offset"),
+    },
+  },
+  async (params) => {
+    const result = projectList(projectStore, params);
+
+    if (result.projects.length === 0) {
+      return {
+        content: [{ type: "text" as const, text: "No projects found." }],
+      };
+    }
+
+    const lines = result.projects.map((p) => {
+      const tech = p.tech_stack.length > 0 ? ` [${p.tech_stack.join(", ")}]` : "";
+      return `[${p.key}] ${p.status} — ${p.display_name}${tech}`;
+    });
+
+    return {
+      content: [{ type: "text" as const, text: lines.join("\n") + `\n\n(${result.total} total)` }],
+    };
+  },
+);
+
+// ── project_archive ─────────────────────────────────────────────
+
+server.registerTool(
+  "telos_project_archive",
+  {
+    description: "Archive a project (moves to archive/year/)",
+    inputSchema: {
+      key: z.string().describe("Project key to archive"),
+      reason: z.string().optional().describe("Why this project is being archived"),
+      force: z.boolean().optional().describe("Skip safety warnings"),
+    },
+  },
+  async (params) => {
+    const result = projectArchive(projectStore, params);
+
+    if (!result.project) {
+      return {
+        content: [{ type: "text" as const, text: `Project "${params.key}" not found.` }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [{ type: "text" as const, text: `Project "${params.key}" archived.` }],
+    };
+  },
+);
+
 // ── Start ───────────────────────────────────────────────────────
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`[telos] Task server running on stdio (${store.count()} tasks in ${config.dir})`);
+  console.error(`[telos] Task server running (${taskStore.count()} tasks in ${config.tasks_root})`);
+  console.error(`[telos] Project server ready (${projectStore.count()} projects in ${config.projects_root})`);
 }
 
 main().catch((err) => {
