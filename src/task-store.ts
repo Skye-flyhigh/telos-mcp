@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Task, TaskStatus, TaskSummary } from "./types.js";
 import { VALID_TASK_STATUSES } from "./types.js";
-import { isoNow, parseFrontmatter, serializeFrontmatter } from "./utils.js";
+import { isoNow, parseFrontmatter, serializeFrontmatter, slugify } from "./utils.js";
 
 export class TaskStore {
   private dir: string;
@@ -67,8 +67,8 @@ export class TaskStore {
   }
 
   get(id: number): Task | null {
-    const taskDir = join(this.dir, String(id));
-    if (!existsSync(taskDir)) return null;
+    const taskDir = this.findTaskDir(id);
+    if (!taskDir) return null;
     return this.readTask(taskDir);
   }
 
@@ -126,16 +126,18 @@ export class TaskStore {
       return null;
     }
 
-    const taskDir = join(this.dir, String(id));
-    if (!existsSync(taskDir)) return null;
+    const taskDir = this.findTaskDir(id);
+    if (!taskDir) return null;
     const task = this.readTask(taskDir);
 
     const now = isoNow();
+    const oldSubject = task.subject;
 
     if (fields.status && VALID_TASK_STATUSES.includes(fields.status)) {
       task.status = fields.status;
     }
 
+    // Update scalar fields (explicit for clarity)
     if (fields.subject !== undefined) task.subject = fields.subject;
     if (fields.description !== undefined) task.description = fields.description;
     if (fields.owner !== undefined) task.owner = fields.owner ?? null;
@@ -167,14 +169,22 @@ export class TaskStore {
       this.unblockDependents(id, now);
     }
 
+    // Rename folder if subject changed
+    if (fields.subject !== undefined && fields.subject !== oldSubject) {
+      const newTaskDir = join(this.dir, `${task.id}-${slugify(task.subject)}`);
+      if (newTaskDir !== taskDir) {
+        renameSync(taskDir, newTaskDir);
+      }
+    }
+
     task.updated = now;
     this.writeTask(task);
     return task;
   }
 
   delete(id: number): boolean {
-    const taskDir = join(this.dir, String(id));
-    if (!existsSync(taskDir)) return false;
+    const taskDir = this.findTaskDir(id);
+    if (!taskDir) return false;
 
     // Clean up dependencies before removing
     this.unblockDependents(id, isoNow());
@@ -215,9 +225,21 @@ export class TaskStore {
   private taskDirs(): string[] {
     if (!existsSync(this.dir)) return [];
     return readdirSync(this.dir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && /^\d+$/.test(d.name))
+      .filter((d) => d.isDirectory() && /^\d+-/.test(d.name))
       .map((d) => d.name)
       .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+  }
+
+  /** Find task directory by ID (handles slugified folder names) */
+  private findTaskDir(id: number): string | null {
+    if (!existsSync(this.dir)) return null;
+    const dirs = readdirSync(this.dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+    // Find directory that starts with {id}-
+    const taskDir = dirs.find((d) => d.startsWith(`${id}-`));
+    return taskDir ? join(this.dir, taskDir) : null;
   }
 
   private readTask(taskDir: string): Task {
@@ -247,7 +269,7 @@ export class TaskStore {
   }
 
   private writeTask(task: Task): void {
-    const taskDir = join(this.dir, String(task.id));
+    const taskDir = join(this.dir, `${task.id}-${slugify(task.subject)}`);
     mkdirSync(taskDir, { recursive: true });
 
     const readmePath = join(taskDir, "README.md");

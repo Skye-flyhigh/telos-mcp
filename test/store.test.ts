@@ -70,8 +70,8 @@ describe("TaskStore", () => {
   it("writes README.md with YAML frontmatter in folder", () => {
     store.createTask({ subject: "Test task", description: "Some details here" });
 
-    // Check README.md exists with frontmatter
-    const readme = readFileSync(join(tmpDir, "1", "README.md"), "utf-8");
+    // Check README.md exists with frontmatter in slugified folder
+    const readme = readFileSync(join(tmpDir, "1-test-task", "README.md"), "utf-8");
     expect(readme).toContain("---");
     expect(readme).toContain("id: 1");
     expect(readme).toContain("subject: Test task");
@@ -316,7 +316,7 @@ describe("TaskStore", () => {
       metadata: { priority: "high" },
     });
 
-    const readme = readFileSync(join(tmpDir, "1", "README.md"), "utf-8");
+    const readme = readFileSync(join(tmpDir, "1-metadata-check", "README.md"), "utf-8");
     expect(readme).toContain("priority: high");
   });
 
