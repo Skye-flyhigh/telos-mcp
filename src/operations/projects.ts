@@ -1,5 +1,5 @@
-import type { ProjectStore } from "../project-store.js";
 import { join } from "node:path";
+import type { ProjectStore } from "../project-store.js";
 import type {
   Project,
   ProjectArchiveInput,
@@ -85,7 +85,7 @@ export function projectArchive(
     return { project: null };
   }
 
-  // Check for blockers (would need task store integration)
+  // TODO: Check for blockers (would need task store integration)
   // For now, just archive
 
   const archived = store.archive(input.key, input.reason);
@@ -95,22 +95,4 @@ export function projectArchive(
     archived_tasks_count: 0, // Would count tasks with this project_id
     warnings: warnings.length > 0 ? warnings : undefined,
   };
-}
-
-// Format project for Obsidian Dataview
-export function formatProjectForObsidian(project: Project): string {
-  const tech = project.tech_stack.length > 0 ? project.tech_stack.join(", ") : "none";
-  const status = project.status;
-
-  return `| [[${project.key}]] | ${status} | ${tech} | - |`;
-}
-
-// Generate Obsidian Dataview query
-export function generateObsidianQuery(): string {
-  return `\`\`\`dataview
-TABLE status, tech_stack, length(file.inlinks) as tasks
-FROM "telos/projects"
-WHERE file.name = "project"
-SORT updated DESC
-\`\`\``;
 }

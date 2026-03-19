@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Project, ProjectListFilters } from "./types.js";
-import { isoNow, parseYaml, serializeYaml } from "./utils.js";
+import { isoNow, parseFrontmatter, serializeFrontmatter } from "./utils.js";
 
 export class ProjectStore {
   private projectsRoot: string;
@@ -55,13 +55,47 @@ export class ProjectStore {
   }
 
   get(key: string): Project | null {
-    const path = this.projectPath(key);
-    if (!existsSync(path)) return null;
-    return this.readProject(path);
+    // Try active projects first
+    const activePath = this.projectPath(key);
+    if (existsSync(activePath)) {
+      return this.readProject(activePath);
+    }
+
+    // Try archive (check all year folders)
+    if (existsSync(this.archiveRoot)) {
+      const years = readdirSync(this.archiveRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+
+      for (const year of years) {
+        const archivePath = join(this.archiveRoot, year, key, "project.md");
+        if (existsSync(archivePath)) {
+          return this.readProject(archivePath);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  update(key: string, fields: Partial<Project>): Project | null {
+    const original = this.get(key)
+    if (!original) return null
+    
+    const updated: Project = {
+      ...original,
+      ...fields,
+      key: original.key,
+      updated: new Date().toISOString()
+    }
+
+    this.writeProject(updated)
+
+    return updated
   }
 
   list(filters?: ProjectListFilters): Project[] {
-    const keys = this.projectKeys();
+    const keys = this.projectKeys(filters?.status === "archived" || filters?.status === "all");
     const results: Project[] = [];
 
     for (const key of keys) {
@@ -115,15 +149,18 @@ export class ProjectStore {
     project.archived_at = now;
     project.archived_reason = reason ?? null;
 
-    // Move to archive
-    const oldPath = this.projectPath(key);
+    // Move entire project folder to archive (keep Obsidian visibility)
+    const oldPath = join(this.projectsRoot, key);
     const year = now.slice(0, 4); // "2026"
     const archiveDir = join(this.archiveRoot, year);
     mkdirSync(archiveDir, { recursive: true });
-    const newPath = join(archiveDir, `${key}.yaml`);
+    const newPath = join(archiveDir, key);
 
+    // Update project.md before moving
+    this.writeProject(project);
+
+    // Move entire project folder (including tasks/)
     renameSync(oldPath, newPath);
-    this.writeProjectAt(project, newPath);
 
     return project;
   }
@@ -144,26 +181,49 @@ export class ProjectStore {
   // ── Private ────────────────────────────────────────────────────
 
   private projectPath(key: string): string {
-    return join(this.projectsRoot, key, "project.yaml");
+    return join(this.projectsRoot, key, "project.md");
   }
 
-  private projectKeys(): string[] {
-    if (!existsSync(this.projectsRoot)) return [];
-    return readdirSync(this.projectsRoot, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name)
-      .filter((name) => /^[a-z0-9-]+$/.test(name));
+  private projectKeys(includeArchived = false): string[] {
+    const keys: string[] = [];
+
+    // Active projects
+    if (existsSync(this.projectsRoot)) {
+      const activeKeys = readdirSync(this.projectsRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+        .filter((name) => /^[a-z0-9-]+$/.test(name));
+      keys.push(...activeKeys);
+    }
+
+    // Archived projects
+    if (includeArchived && existsSync(this.archiveRoot)) {
+      const years = readdirSync(this.archiveRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+
+      for (const year of years) {
+        const yearDir = join(this.archiveRoot, year);
+        const archivedKeys = readdirSync(yearDir, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => d.name)
+          .filter((name) => /^[a-z0-9-]+$/.test(name));
+        keys.push(...archivedKeys);
+      }
+    }
+
+    return [...new Set(keys)]; // Remove duplicates
   }
 
   private readProject(path: string): Project {
     const raw = readFileSync(path, "utf-8");
-    const data = parseYaml(raw) as Record<string, unknown>;
+    const { data, body } = parseFrontmatter(raw) as {data: Record<string, unknown>, body: string};
 
     // Ensure all fields exist (migration safety)
     return {
       key: String(data.key),
       display_name: String(data.display_name),
-      description: String(data.description ?? ""),
+      description: String(body ?? ""),
       base_path: String(data.base_path ?? ""),
       tech_stack: Array.isArray(data.tech_stack) ? data.tech_stack.map(String) : [],
       repo_url: String(data.repo_url ?? ""),
@@ -184,6 +244,8 @@ export class ProjectStore {
   private writeProjectAt(project: Project, path: string): void {
     const dir = path.slice(0, path.lastIndexOf("/"));
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path, serializeYaml(project as unknown as Record<string, unknown>), "utf-8");
+
+    const { description, ...frontmatterData } = project
+    writeFileSync(path, serializeFrontmatter(frontmatterData as Partial<Project>, description), "utf-8");
   }
 }

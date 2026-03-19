@@ -1,6 +1,6 @@
 /**
  * Project types for Telos v2
- * Mirrors schemas/project.yaml
+ * Mirrors schemas/project.md
  */
 
 export type ProjectStatus = 'active' | 'paused' | 'archived';

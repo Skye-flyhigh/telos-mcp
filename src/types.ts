@@ -59,6 +59,7 @@ export interface TaskSummary {
   blockedBy: number[];
   tags: string[] | null;
   depth: number;
+  parent_id: number | null;
 }
 
 export interface ProjectListFilters {
@@ -120,7 +121,24 @@ export interface TaskCreateInput {
   activeForm?: string;
   owner?: string;
   blockedBy?: number[];
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, string>;
   parent_id?: number;  // Phase 2
   sources?: string[];  // URLs, references used for planning this task
+}
+
+export interface TaskMoveInput {
+  taskId: number;
+  project_id: string | null;  // null to move to global tasks
+  preserve_folder?: boolean;    // If true, keep task folder name as-is
+}
+
+export interface TaskCreateBulkInput {
+  tasks: Omit<TaskCreateInput, 'project_id'>[];
+  project_id?: string;
+  parent_id?: number;
+}
+
+export interface TaskTreeNode extends TaskSummary {
+  children: TaskTreeNode[];
+  parent_id: number | null;
 }

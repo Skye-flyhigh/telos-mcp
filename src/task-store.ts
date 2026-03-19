@@ -5,11 +5,40 @@ import { VALID_TASK_STATUSES } from "./types.js";
 import { isoNow, parseFrontmatter, serializeFrontmatter, slugify } from "./utils.js";
 
 export class TaskStore {
-  private dir: string;
+  private tasksRoot: string;
+  private projectsRoot: string;
 
-  constructor(dir: string) {
-    this.dir = dir;
-    mkdirSync(dir, { recursive: true });
+  constructor(tasksRoot: string, projectsRoot: string) {
+    this.tasksRoot = tasksRoot;
+    this.projectsRoot = projectsRoot;
+    mkdirSync(tasksRoot, { recursive: true });
+    mkdirSync(projectsRoot, { recursive: true });
+  }
+
+  /** Get all task directories (global + all project tasks) */
+  private getAllTasksDirs(): string[] {
+    const dirs: string[] = [];
+
+    // Global tasks
+    if (existsSync(this.tasksRoot)) {
+      dirs.push(this.tasksRoot);
+    }
+
+    // Project tasks
+    if (existsSync(this.projectsRoot)) {
+      const projects = readdirSync(this.projectsRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+
+      for (const project of projects) {
+        const projectTasksDir = join(this.projectsRoot, project, "tasks");
+        if (existsSync(projectTasksDir)) {
+          dirs.push(projectTasksDir);
+        }
+      }
+    }
+
+    return dirs;
   }
 
   createTask(fields: {
@@ -82,7 +111,7 @@ export class TaskStore {
     const taskDirs = this.taskDirs();
 
     for (const dir of taskDirs) {
-      const task = this.readTask(join(this.dir, dir));
+      const task = this.readTask(dir);
 
       if (filters?.status && task.status !== filters.status) continue;
       if (filters?.owner && task.owner !== filters.owner) continue;
@@ -98,6 +127,7 @@ export class TaskStore {
         blockedBy: task.blockedBy,
         tags: task.tags,
         depth: task.depth,
+        parent_id: task.parent_id,
       });
     }
 
@@ -171,7 +201,8 @@ export class TaskStore {
 
     // Rename folder if subject changed
     if (fields.subject !== undefined && fields.subject !== oldSubject) {
-      const newTaskDir = join(this.dir, `${task.id}-${slugify(task.subject)}`);
+      const tasksDir = this.getTasksDir(task.project_id);
+      const newTaskDir = join(tasksDir, `${task.id}-${slugify(task.subject)}`);
       if (newTaskDir !== taskDir) {
         renameSync(taskDir, newTaskDir);
       }
@@ -201,7 +232,7 @@ export class TaskStore {
   // ── Private ────────────────────────────────────────────────────
 
   private nextId(): number {
-    const counterPath = join(this.dir, ".next_id");
+    const counterPath = join(this.tasksRoot, ".next_id");
     let nextId = 1;
 
     if (existsSync(counterPath)) {
@@ -209,11 +240,11 @@ export class TaskStore {
       if (!Number.isNaN(stored)) nextId = stored;
     }
 
-    // Also check existing directories
+    // Also check existing directories across all locations
     const dirs = this.taskDirs();
     if (dirs.length > 0) {
       const maxExisting = Math.max(
-        ...dirs.map((d) => parseInt(d, 10)).filter((n) => !Number.isNaN(n)),
+        ...dirs.map((d) => parseInt(d.split("-")[0], 10)).filter((n) => !Number.isNaN(n)),
       );
       if (maxExisting >= nextId) nextId = maxExisting + 1;
     }
@@ -222,24 +253,38 @@ export class TaskStore {
     return nextId;
   }
 
+  /** Get all task directories across all locations (returns full paths) */
   private taskDirs(): string[] {
-    if (!existsSync(this.dir)) return [];
-    return readdirSync(this.dir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && /^\d+-/.test(d.name))
-      .map((d) => d.name)
-      .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    const allTaskDirs: string[] = [];
+
+    for (const tasksDir of this.getAllTasksDirs()) {
+      if (!existsSync(tasksDir)) continue;
+      const dirs = readdirSync(tasksDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && /^\d+-/.test(d.name))
+        .map((d) => join(tasksDir, d.name));
+      allTaskDirs.push(...dirs);
+    }
+
+    return allTaskDirs.sort((a, b) => {
+      const idA = parseInt(a.split("/").pop()?.split("-")[0] || "0", 10);
+      const idB = parseInt(b.split("/").pop()?.split("-")[0] || "0", 10);
+      return idA - idB;
+    });
   }
 
-  /** Find task directory by ID (handles slugified folder names) */
+  /** Find task directory by ID across all locations */
   private findTaskDir(id: number): string | null {
-    if (!existsSync(this.dir)) return null;
-    const dirs = readdirSync(this.dir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
+    for (const tasksDir of this.getAllTasksDirs()) {
+      if (!existsSync(tasksDir)) continue;
+      const dirs = readdirSync(tasksDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
 
-    // Find directory that starts with {id}-
-    const taskDir = dirs.find((d) => d.startsWith(`${id}-`));
-    return taskDir ? join(this.dir, taskDir) : null;
+      // Find directory that starts with {id}-
+      const taskDir = dirs.find((d) => d.startsWith(`${id}-`));
+      if (taskDir) return join(tasksDir, taskDir);
+    }
+    return null;
   }
 
   private readTask(taskDir: string): Task {
@@ -268,8 +313,19 @@ export class TaskStore {
     };
   }
 
+  /** Get the tasks directory for a specific project or global */
+  private getTasksDir(project_id: string | null): string {
+    if (project_id) {
+      const dir = join(this.projectsRoot, project_id, "tasks");
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    }
+    return this.tasksRoot;
+  }
+
   private writeTask(task: Task): void {
-    const taskDir = join(this.dir, `${task.id}-${slugify(task.subject)}`);
+    const tasksDir = this.getTasksDir(task.project_id);
+    const taskDir = join(tasksDir, `${task.id}-${slugify(task.subject)}`);
     mkdirSync(taskDir, { recursive: true });
 
     const readmePath = join(taskDir, "README.md");

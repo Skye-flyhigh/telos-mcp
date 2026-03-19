@@ -5,12 +5,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { projectArchive, projectCreate, projectList } from "./operations/projects.js";
+import { formatTaskTree, getTaskTree, taskCreateBulk, taskMove } from "./operations/tasks.js";
 import { ProjectStore } from "./project-store.js";
 import { TaskStore } from "./task-store.js";
 import { VALID_TASK_STATUSES } from "./types.js";
 
 const config = loadConfig();
-const taskStore = new TaskStore(config.tasks_root);
+const taskStore = new TaskStore(config.tasks_root, config.projects_root);
 const projectStore = new ProjectStore(config.projects_root, config.archive_root);
 
 const server = new McpServer({
@@ -36,7 +37,7 @@ Structured description, details points when applicable:
 - Sources and reference: explicitely list the sources used to design the plan, or say no sources have been used.
 `;
 
-const taskRecord = {
+const taskRecords = {
   subject: z.string().describe("Brief imperative title (e.g. 'Fix auth bug')"),
   description: z.string().optional().describe(`Detailed markdown description. \n ${descriptionStructure}`),
   owner: z.string().optional().describe("Who owns this task"),
@@ -70,6 +71,15 @@ const taskStatus = (variant: TaskVariant) => {
   return z.enum(VALID_TASK_STATUSES).optional().describe(description)
 }
 
+const projectRecords = {
+  display_name: z.string().min(1).describe("Human-readable project name"),
+  description: z.string().optional().describe("Optional project description explaining the context of the project"),
+  base_path: z.string().optional().describe("Absolute path to project source code"),
+  tech_stack: z.array(z.string()).optional().describe("Technologies used"),
+  repo_url: z.string().url().optional().describe("Git repository URL"),
+  sources: z.array(z.string()).optional().describe("Initial references, documentation, or research sources for the project"),
+}
+
 // ── task_create ─────────────────────────────────────────────────
 
 server.registerTool(
@@ -77,7 +87,7 @@ server.registerTool(
   {
     description: "Create a new task for tracking work",
     inputSchema: {
-      ...taskRecord,
+      ...taskRecords,
       blockedBy: z.array(z.number()).optional().describe("Task IDs that must complete first"),
     }
   },
@@ -207,21 +217,98 @@ server.registerTool(
   },
 );
 
+// ── task_move ──────────────────────────────────────────────────
+
+server.registerTool(
+  "task_move",
+  {
+    description: "Move a task to a different project (or to global tasks)",
+    inputSchema: {
+      taskId: z.number().describe("The task ID to move"),
+      project_id: z.string().nullable().optional().describe("Target project key (null for global tasks)"),
+    }
+  },
+  async (params) => {
+    try {
+      const result = taskMove(taskStore, params.taskId, params.project_id ?? null);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ── task_create_bulk ────────────────────────────────────────────
+
+server.registerTool(
+  "task_create_bulk",
+  {
+    description: "Create multiple tasks at once",
+    inputSchema: {
+      tasks: z.array(z.object({
+        ...taskRecords,
+        blockedBy: z.array(z.number()).optional().describe("Task IDs that must complete first"),
+      })).describe("Array of task definitions"),
+      project_id: z.string().optional().describe("Project key for all tasks (optional)"),
+    }
+  },
+  async (params) => {
+    try {
+      const result = taskCreateBulk(taskStore, params.tasks, params.project_id);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: err instanceof Error ? err.message : String(err) }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ── task_tree ───────────────────────────────────────────────────
+
+server.registerTool(
+  "task_tree",
+  {
+    description: "Get task hierarchy tree with all descendants",
+    inputSchema: {
+      rootId: z.number().optional().describe("Root task ID (if omitted, returns all root tasks)"),
+    }
+  },
+  async (params) => {
+    const result = getTaskTree(taskStore, params.rootId);
+
+    if (result.roots.length === 0) {
+      return {
+        content: [{ type: "text" as const, text: "No tasks found." }],
+      };
+    }
+
+    const formatted = formatTaskTree(result.roots);
+
+    return {
+      content: [{ type: "text" as const, text: formatted + `\n\n(${result.total} total tasks)` }],
+    };
+  },
+);
+
 // ── project_create ──────────────────────────────────────────────
 
 server.registerTool(
-  "telos_project_create",
+  "project_create",
   {
     description: "Create a new project for organizing tasks",
     inputSchema: {
       key: z.string().regex(/^[a-z0-9-]+$/, "Must be kebab-case, no spaces").describe("Unique project identifier"),
-      display_name: z.string().min(1).describe("Human-readable project name"),
-      description: z.string().optional().describe("Optional project description"),
-      base_path: z.string().optional().describe("Absolute path to project source code"),
-      tech_stack: z.array(z.string()).optional().describe("Technologies used"),
-      repo_url: z.string().url().optional().describe("Git repository URL"),
       clone: z.boolean().optional().describe("If true, clone repo_url to base_path"),
-      sources: z.array(z.string()).optional().describe("Initial references, documentation, or research sources for the project"),
+      ...projectRecords
     },
   },
   async (params) => {
@@ -239,10 +326,44 @@ server.registerTool(
   },
 );
 
+// ── project_update ────────────────────────────────────────────────
+
+server.registerTool(
+  "project_update",
+  {
+    description: "Update project",
+    inputSchema: {
+      key: z.string().min(1).describe("Project key to update"),
+      ...projectRecords,
+    }
+  },
+  async (params) => {
+    const { key, ...fields } = params
+    const project = projectStore.update(key, fields)
+    
+    if (!project) {
+      return {
+        content: [{ type: "text" as const, text: `Project '${key}' not found.` }],
+        isError: true,
+      }
+    }
+
+    if (project.status === "archived") {
+      return {
+        content: [{ type: "text" as const, text: `Project '${key}' archived.` }]
+      }
+    }
+
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(project, null, 2)}]
+    }
+  }
+)
+
 // ── project_list ────────────────────────────────────────────────
 
 server.registerTool(
-  "telos_project_list",
+  "project_list",
   {
     description: "List all projects with optional filtering",
     inputSchema: {
@@ -274,10 +395,35 @@ server.registerTool(
   },
 );
 
+// ── project_get ────────────────────────────────────────────────
+
+server.registerTool(
+  "project_get",
+  {
+    description: "Get project information by key",
+    inputSchema: {
+      key: z.string().describe("Project key to retrieve")
+    },
+  },
+  async(params) => {
+    const { key } = params
+
+    const project = projectStore.get(key)
+    if (!project) return {
+    content: [{ type: "text", text: `Project '${key}' not found.` }],
+    isError: true,
+    }
+    
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(project, null, 2) }],
+    };
+}
+)
+
 // ── project_archive ─────────────────────────────────────────────
 
 server.registerTool(
-  "telos_project_archive",
+  "project_archive",
   {
     description: "Archive a project (moves to archive/year/)",
     inputSchema: {

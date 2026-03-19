@@ -139,7 +139,7 @@ Implement Phase 1 of the Telos v2 spec: schemas, operations, and migration tooli
 - Project reference via `project_id` field
 
 ## Dependencies
-- #16: Define project.yaml schema
+- #16: Define project.md schema
 - #17: Define task.yaml schema
 - #18: Design file layout
 

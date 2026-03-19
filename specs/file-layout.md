@@ -6,15 +6,15 @@
 ~/.blackcat/telos/              # Root directory
 ├── config.yaml                 # Global configuration
 ├── schemas/                    # JSON schemas for validation
-│   ├── project.yaml
+│   ├── project.md
 │   └── task.yaml
 ├── projects/                   # Project metadata
 │   ├── mnemo/
-│   │   ├── project.yaml
+│   │   ├── project.md
 │   │   ├── context.md          # Auto-generated from mnemo
 │   │   └── README.md           # Optional project docs
 │   └── black-cat/
-│       ├── project.yaml
+│       ├── project.md
 │       ├── context.md
 │       └── README.md
 ├── tasks/                      # All tasks (global namespace)

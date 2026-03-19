@@ -1,15 +1,17 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TaskStore } from "../src/task-store.js";
 
-let store: TaskStore;
+let taskStore: TaskStore;
 let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "telos-test-"));
-  store = new TaskStore(tmpDir);
+  const tasksDir = join(tmpDir, "tasks");
+  const projectsDir = join(tmpDir, "projects");
+  taskStore = new TaskStore(tasksDir, projectsDir);
 });
 
 afterEach(() => {
@@ -20,7 +22,7 @@ describe("TaskStore", () => {
   // ── Create ──────────────────────────────────────────────────────
 
   it("creates a task with defaults", () => {
-    const task = store.createTask({ subject: "Fix the bug" });
+    const task = taskStore.createTask({ subject: "Fix the bug" });
 
     expect(task.id).toBe(1);
     expect(task.subject).toBe("Fix the bug");
@@ -38,13 +40,13 @@ describe("TaskStore", () => {
   });
 
   it("creates a task with all fields", () => {
-    const task = store.createTask({
+    const task = taskStore.createTask({
       subject: "Add auth",
       description: "Implement JWT authentication",
       owner: "echo",
       tags: ["backend", "security"],
       project_id: "paramot",
-      parent_id: null,
+      parent_id: undefined,
       sources: ["https://jwt.io", "Claude research"],
     });
 
@@ -58,9 +60,9 @@ describe("TaskStore", () => {
   });
 
   it("auto-increments IDs", () => {
-    const t1 = store.createTask({ subject: "First" });
-    const t2 = store.createTask({ subject: "Second" });
-    const t3 = store.createTask({ subject: "Third" });
+    const t1 = taskStore.createTask({ subject: "First" });
+    const t2 = taskStore.createTask({ subject: "Second" });
+    const t3 = taskStore.createTask({ subject: "Third" });
 
     expect(t1.id).toBe(1);
     expect(t2.id).toBe(2);
@@ -68,10 +70,10 @@ describe("TaskStore", () => {
   });
 
   it("writes README.md with YAML frontmatter in folder", () => {
-    store.createTask({ subject: "Test task", description: "Some details here" });
+    taskStore.createTask({ subject: "Test task", description: "Some details here" });
 
-    // Check README.md exists with frontmatter in slugified folder
-    const readme = readFileSync(join(tmpDir, "1-test-task", "README.md"), "utf-8");
+    // Check README.md exists with frontmatter in slugified folder (in global tasks/)
+    const readme = readFileSync(join(tmpDir, "tasks", "1-test-task", "README.md"), "utf-8");
     expect(readme).toContain("---");
     expect(readme).toContain("id: 1");
     expect(readme).toContain("subject: Test task");
@@ -82,79 +84,79 @@ describe("TaskStore", () => {
   // ── Get ─────────────────────────────────────────────────────────
 
   it("gets a task by ID", () => {
-    store.createTask({ subject: "Find me" });
+    taskStore.createTask({ subject: "Find me" });
 
-    const task = store.get(1);
+    const task = taskStore.get(1);
     expect(task).not.toBeNull();
     expect(task!.subject).toBe("Find me");
   });
 
   it("returns null for missing ID", () => {
-    expect(store.get(999)).toBeNull();
+    expect(taskStore.get(999)).toBeNull();
   });
 
   // ── List ────────────────────────────────────────────────────────
 
   it("lists all tasks", () => {
-    store.createTask({ subject: "A" });
-    store.createTask({ subject: "B" });
-    store.createTask({ subject: "C" });
+    taskStore.createTask({ subject: "A" });
+    taskStore.createTask({ subject: "B" });
+    taskStore.createTask({ subject: "C" });
 
-    const tasks = store.list();
+    const tasks = taskStore.list();
     expect(tasks).toHaveLength(3);
     expect(tasks[0].id).toBe(1);
     expect(tasks[2].id).toBe(3);
   });
 
   it("filters by status", () => {
-    store.createTask({ subject: "Pending" });
-    const t2 = store.createTask({ subject: "Done" });
-    store.update(t2.id, { status: "completed" });
+    taskStore.createTask({ subject: "Pending" });
+    const t2 = taskStore.createTask({ subject: "Done" });
+    taskStore.update(t2.id, { status: "completed" });
 
-    const pending = store.list({ status: "pending" });
+    const pending = taskStore.list({ status: "pending" });
     expect(pending).toHaveLength(1);
     expect(pending[0].subject).toBe("Pending");
 
-    const completed = store.list({ status: "completed" });
+    const completed = taskStore.list({ status: "completed" });
     expect(completed).toHaveLength(1);
     expect(completed[0].subject).toBe("Done");
   });
 
   it("filters by owner", () => {
-    store.createTask({ subject: "A", owner: "echo" });
-    store.createTask({ subject: "B", owner: "nyx" });
+    taskStore.createTask({ subject: "A", owner: "echo" });
+    taskStore.createTask({ subject: "B", owner: "nyx" });
 
-    const echoTasks = store.list({ owner: "echo" });
+    const echoTasks = taskStore.list({ owner: "echo" });
     expect(echoTasks).toHaveLength(1);
     expect(echoTasks[0].subject).toBe("A");
   });
 
   it("filters by tag", () => {
-    store.createTask({ subject: "Backend work", tags: ["backend"] });
-    store.createTask({ subject: "Frontend work", tags: ["frontend"] });
+    taskStore.createTask({ subject: "Backend work", tags: ["backend"] });
+    taskStore.createTask({ subject: "Frontend work", tags: ["frontend"] });
 
     // Note: list() filters by tags array, individual tag filtering done at higher level
-    const all = store.list();
+    const all = taskStore.list();
     expect(all).toHaveLength(2);
   });
 
   // ── Update ──────────────────────────────────────────────────────
 
   it("updates status", () => {
-    const task = store.createTask({ subject: "Do it" });
+    const task = taskStore.createTask({ subject: "Do it" });
 
-    const updated = store.update(task.id, { status: "in_progress" });
+    const updated = taskStore.update(task.id, { status: "in_progress" });
     expect(updated!.status).toBe("in_progress");
 
     // Verify persisted
-    const fromDisk = store.get(task.id);
+    const fromDisk = taskStore.get(task.id);
     expect(fromDisk!.status).toBe("in_progress");
   });
 
   it("updates subject and description", () => {
-    const task = store.createTask({ subject: "Old title", description: "Old desc" });
+    const task = taskStore.createTask({ subject: "Old title", description: "Old desc" });
 
-    const updated = store.update(task.id, {
+    const updated = taskStore.update(task.id, {
       subject: "New title",
       description: "New desc",
     });
@@ -164,112 +166,112 @@ describe("TaskStore", () => {
   });
 
   it("updates tags", () => {
-    const task = store.createTask({ subject: "Tagged", tags: ["old"] });
+    const task = taskStore.createTask({ subject: "Tagged", tags: ["old"] });
 
-    const updated = store.update(task.id, { tags: ["new", "shiny"] });
+    const updated = taskStore.update(task.id, { tags: ["new", "shiny"] });
     expect(updated!.tags).toEqual(["new", "shiny"]);
   });
 
   it("returns null for missing ID", () => {
-    expect(store.update(999, { status: "completed" })).toBeNull();
+    expect(taskStore.update(999, { status: "completed" })).toBeNull();
   });
 
   it("handles deleted status", () => {
-    const task = store.createTask({ subject: "Bye" });
+    const task = taskStore.createTask({ subject: "Bye" });
 
-    const result = store.update(task.id, { status: "deleted" });
+    const result = taskStore.update(task.id, { status: "deleted" });
     expect(result).toBeNull(); // deleted returns null
-    expect(store.get(task.id)).toBeNull(); // file removed
+    expect(taskStore.get(task.id)).toBeNull(); // file removed
   });
 
   // ── Delete ──────────────────────────────────────────────────────
 
   it("deletes a task", () => {
-    const task = store.createTask({ subject: "Delete me" });
+    const task = taskStore.createTask({ subject: "Delete me" });
 
-    expect(store.delete(task.id)).toBe(true);
-    expect(store.get(task.id)).toBeNull();
-    expect(store.count()).toBe(0);
+    expect(taskStore.delete(task.id)).toBe(true);
+    expect(taskStore.get(task.id)).toBeNull();
+    expect(taskStore.count()).toBe(0);
   });
 
   it("returns false for missing ID", () => {
-    expect(store.delete(999)).toBe(false);
+    expect(taskStore.delete(999)).toBe(false);
   });
 
   // ── Dependencies ────────────────────────────────────────────────
 
   it("sets up blockedBy on create", () => {
-    const t1 = store.createTask({ subject: "First" });
-    const t2 = store.createTask({ subject: "Second", blockedBy: [t1.id] });
+    const t1 = taskStore.createTask({ subject: "First" });
+    const t2 = taskStore.createTask({ subject: "Second", blockedBy: [t1.id] });
 
     expect(t2.blockedBy).toEqual([1]);
 
     // Reverse: t1 should now list t2 in blocks
-    const t1Updated = store.get(t1.id);
+    const t1Updated = taskStore.get(t1.id);
     expect(t1Updated!.blocks).toEqual([2]);
   });
 
   it("adds blockedBy via update", () => {
-    const t1 = store.createTask({ subject: "First" });
-    const t2 = store.createTask({ subject: "Second" });
+    const t1 = taskStore.createTask({ subject: "First" });
+    const t2 = taskStore.createTask({ subject: "Second" });
 
-    store.update(t2.id, { addBlockedBy: [t1.id] });
+    taskStore.update(t2.id, { addBlockedBy: [t1.id] });
 
-    const updated = store.get(t2.id);
+    const updated = taskStore.get(t2.id);
     expect(updated!.blockedBy).toEqual([1]);
 
-    const t1Updated = store.get(t1.id);
+    const t1Updated = taskStore.get(t1.id);
     expect(t1Updated!.blocks).toEqual([2]);
   });
 
   it("adds blocks via update", () => {
-    const t1 = store.createTask({ subject: "First" });
-    const t2 = store.createTask({ subject: "Second" });
+    const t1 = taskStore.createTask({ subject: "First" });
+    const t2 = taskStore.createTask({ subject: "Second" });
 
-    store.update(t1.id, { addBlocks: [t2.id] });
+    taskStore.update(t1.id, { addBlocks: [t2.id] });
 
-    const t1Updated = store.get(t1.id);
+    const t1Updated = taskStore.get(t1.id);
     expect(t1Updated!.blocks).toEqual([2]);
 
-    const t2Updated = store.get(t2.id);
+    const t2Updated = taskStore.get(t2.id);
     expect(t2Updated!.blockedBy).toEqual([1]);
   });
 
   it("completing a task unblocks dependents", () => {
-    const t1 = store.createTask({ subject: "Blocker" });
-    store.createTask({ subject: "Blocked", blockedBy: [t1.id] });
+    const t1 = taskStore.createTask({ subject: "Blocker" });
+    taskStore.createTask({ subject: "Blocked", blockedBy: [t1.id] });
 
-    store.update(t1.id, { status: "completed" });
+    taskStore.update(t1.id, { status: "completed" });
 
-    const t2 = store.get(2);
+    const t2 = taskStore.get(2);
     expect(t2!.blockedBy).toEqual([]);
   });
 
   it("deleting a task cleans up dependencies", () => {
-    const t1 = store.createTask({ subject: "Will be deleted" });
-    const t2 = store.createTask({ subject: "Depends on t1", blockedBy: [t1.id] });
+    const t1 = taskStore.createTask({ subject: "Will be deleted" });
+    const t2 = taskStore.createTask({ subject: "Depends on t1", blockedBy: [t1.id] });
 
-    store.delete(t1.id);
+    taskStore.delete(t1.id);
 
-    const t2Updated = store.get(t2.id);
+    const t2Updated = taskStore.get(t2.id);
     expect(t2Updated!.blockedBy).toEqual([]);
   });
 
   it("does not duplicate dependencies", () => {
-    const t1 = store.createTask({ subject: "First" });
-    const t2 = store.createTask({ subject: "Second", blockedBy: [t1.id] });
+    const t1 = taskStore.createTask({ subject: "First" });
+    const t2 = taskStore.createTask({ subject: "Second", blockedBy: [t1.id] });
 
     // Try adding the same dependency again
-    store.update(t2.id, { addBlockedBy: [t1.id] });
+    taskStore.update(t2.id, { addBlockedBy: [t1.id] });
 
-    const updated = store.get(t2.id);
+    const updated = taskStore.get(t2.id);
     expect(updated!.blockedBy).toEqual([1]); // Not [1, 1]
   });
 
   // ── Metadata ─────────────────────────────────────────────────────
 
   it("creates a task with metadata", () => {
-    const task = store.createTask({
+    const task = taskStore.createTask({
       subject: "With metadata",
       metadata: { pr: "#42", priority: "high" },
     });
@@ -277,68 +279,68 @@ describe("TaskStore", () => {
     expect(task.metadata).toEqual({ pr: "#42", priority: "high" });
 
     // Verify persisted
-    const fromDisk = store.get(task.id);
+    const fromDisk = taskStore.get(task.id);
     expect(fromDisk!.metadata).toEqual({ pr: "#42", priority: "high" });
   });
 
   it("defaults metadata to empty object", () => {
-    const task = store.createTask({ subject: "No metadata" });
+    const task = taskStore.createTask({ subject: "No metadata" });
     expect(task.metadata).toEqual({});
   });
 
   it("merges metadata on update", () => {
-    const task = store.createTask({
+    const task = taskStore.createTask({
       subject: "Merge test",
       metadata: { a: "1", b: "2" },
     });
 
-    store.update(task.id, { metadata: { b: "updated", c: "3" } });
+    taskStore.update(task.id, { metadata: { b: "updated", c: "3" } });
 
-    const updated = store.get(task.id);
+    const updated = taskStore.get(task.id);
     expect(updated!.metadata).toEqual({ a: "1", b: "updated", c: "3" });
   });
 
   it("deletes metadata keys via null", () => {
-    const task = store.createTask({
+    const task = taskStore.createTask({
       subject: "Delete key test",
       metadata: { keep: "yes", remove: "bye" },
     });
 
-    store.update(task.id, { metadata: { remove: null } });
+    taskStore.update(task.id, { metadata: { remove: null } });
 
-    const updated = store.get(task.id);
+    const updated = taskStore.get(task.id);
     expect(updated!.metadata).toEqual({ keep: "yes" });
   });
 
   it("stores metadata in README.md frontmatter", () => {
-    store.createTask({
+    taskStore.createTask({
       subject: "Metadata check",
       metadata: { priority: "high" },
     });
 
-    const readme = readFileSync(join(tmpDir, "1-metadata-check", "README.md"), "utf-8");
+    const readme = readFileSync(join(tmpDir, "tasks", "1-metadata-check", "README.md"), "utf-8");
     expect(readme).toContain("priority: high");
   });
 
   // ── Count ───────────────────────────────────────────────────────
 
   it("counts tasks", () => {
-    expect(store.count()).toBe(0);
+    expect(taskStore.count()).toBe(0);
 
-    store.createTask({ subject: "A" });
-    store.createTask({ subject: "B" });
+    taskStore.createTask({ subject: "A" });
+    taskStore.createTask({ subject: "B" });
 
-    expect(store.count()).toBe(2);
+    expect(taskStore.count()).toBe(2);
   });
 
   // ── ID reuse after deletion ─────────────────────────────────────
 
   it("does not reuse deleted IDs", () => {
-    store.createTask({ subject: "A" }); // id=1
-    store.createTask({ subject: "B" }); // id=2
-    store.delete(2);
+    taskStore.createTask({ subject: "A" }); // id=1
+    taskStore.createTask({ subject: "B" }); // id=2
+    taskStore.delete(2);
 
-    const t3 = store.createTask({ subject: "C" });
+    const t3 = taskStore.createTask({ subject: "C" });
     expect(t3.id).toBe(3); // Not 2
   });
 });

@@ -8,7 +8,7 @@ Projects in Telos v2 are top-level organizational units that group related tasks
 
 ```
 ~/.blackcat/telos/projects/{key}/
-├── project.yaml    # This file
+├── project.md    # This file
 ├── context.md      # Auto-generated from mnemo memories
 └── README.md       # Optional project documentation
 ```
