@@ -1,0 +1,18 @@
+# Example: Mnemo Project
+# Location: ~/.blackcat/telos/projects/mnemo/project.md
+
+key: mnemo
+display_name: Mnemo Memory System
+description: |
+  Local-first semantic memory system for AI agents.
+  Uses SQLite with vector extensions for embedding storage.
+base_path: /Users/skye/Documents/Coding/Nyx/black-cat/mnemo
+tech_stack:
+  - typescript
+  - sqlite
+  - nodejs
+  - vector-embeddings
+repo_url: https://github.com/skye/mnemo
+status: active
+created: 2026-03-12T00:00:00Z
+updated: 2026-03-12T00:00:00Z

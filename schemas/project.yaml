@@ -1,0 +1,84 @@
+# Project Schema - Telos v2
+# Defines the structure of project.md files
+
+$schema: "http://json-schema.org/draft-07/schema#"
+title: "Telos Project"
+type: "object"
+required:
+  - key
+  - display_name
+  - base_path
+  - status
+  - created
+  - updated
+
+properties:
+  key:
+    type: string
+    pattern: "^[a-z0-9-]+$"
+    description: "Unique project identifier (kebab-case, no spaces)"
+    examples:
+      - "mnemo"
+      - "black-cat"
+      - "flymorocco"
+
+  display_name:
+    type: string
+    minLength: 1
+    description: "Human-readable project name"
+    examples:
+      - "Mnemo Memory System"
+      - "Black Cat Agent"
+
+  description:
+    type: string
+    description: "Optional project description"
+
+  base_path:
+    type: string
+    format: "uri-reference"
+    description: "Absolute path to project source code"
+    examples:
+      - "/Users/skye/Documents/black-cat/mnemo"
+
+  tech_stack:
+    type: array
+    items:
+      type: string
+    description: "Technologies used in this project"
+    examples:
+      - ["typescript", "sqlite", "python"]
+
+  repo_url:
+    type: string
+    format: "uri"
+    description: "Git repository URL"
+    examples:
+      - "https://github.com/Skye-flyhigh/mnemo-mcp"
+
+  status:
+    type: string
+    enum: ["active", "paused", "archived"]
+    default: "active"
+    description: "Current project status"
+
+  created:
+    type: string
+    format: "date-time"
+    description: "ISO8601 timestamp of creation"
+
+  updated:
+    type: string
+    format: "date-time"
+    description: "ISO8601 timestamp of last update"
+
+  archived_at:
+    type: ["string", "null"]
+    format: "date-time"
+    description: "When project was archived (null if active)"
+
+  archived_reason:
+    type: ["string", "null"]
+    description: "Reason for archiving"
+
+additionalProperties: false

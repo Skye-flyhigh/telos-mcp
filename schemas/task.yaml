@@ -1,0 +1,107 @@
+# Task Schema - Telos v2
+# Defines the structure of task.yaml files in folder-based tasks
+
+$schema: "http://json-schema.org/draft-07/schema#"
+title: "Telos Task"
+type: "object"
+required:
+  - id
+  - project_id
+  - subject
+  - status
+  - created
+  - updated
+
+properties:
+  id:
+    type: integer
+    minimum: 1
+    description: "Unique task identifier (global across all projects)"
+
+  project_id:
+    type: string
+    pattern: "^[a-z0-9-]+$"
+    description: "Reference to parent project key"
+
+  subject:
+    type: string
+    minLength: 1
+    description: "Brief imperative description of the task"
+    examples:
+      - "Fix native addon ABI bug"
+      - "Implement user authentication"
+
+  status:
+    type: string
+    enum: ["pending", "planning", "in_progress", "reviewing", "blocked", "completed", "archived"]
+    default: "pending"
+    description: "Current task status"
+
+  owner:
+    type: ["string", "null"]
+    description: "Who owns this task (null for unassigned)"
+
+  created:
+    type: string
+    format: "date-time"
+    description: "ISO8601 timestamp of creation"
+
+  updated:
+    type: string
+    format: "date-time"
+    description: "ISO8601 timestamp of last update"
+
+  metadata:
+    type: object
+    additionalProperties: true
+    description: "Free-form key-value pairs for extensibility"
+    examples:
+      - priority: high
+        estimated_hours: 4
+        actual_hours: 6
+
+  blockedBy:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    default: []
+    description: "Task IDs that must complete before this task"
+
+  blocks:
+    type: array
+    items:
+      type: integer
+      minimum: 1
+    default: []
+    description: "Task IDs blocked by this task"
+
+  context_capture:
+    type: object
+    description: "Snapshot of context at task creation"
+    properties:
+      head_commit:
+        type: ["string", "null"]
+        description: "Git HEAD commit hash"
+      open_files:
+        type: array
+        items:
+          type: string
+        description: "Files open when task was created"
+      timestamp:
+        type: string
+        format: "date-time"
+        description: "When context was captured"
+
+  parent_id:
+    type: ["integer", "null"]
+    description: "Parent task ID (for subtask hierarchy, Phase 2)"
+
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    default: 0
+    description: "Nesting depth (0 = root, max 5)"
+
+additionalProperties: false
